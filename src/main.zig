@@ -4,6 +4,9 @@ const stdin = std.io.getStdIn().reader();
 const Allocator = std.mem.Allocator;
 const mem = std.mem;
 const expect = std.testing.expect;
+const builtin = @import("builtin");
+
+const SHELL_NAME = "zigsh";
 
 fn read_line(allocator: *Allocator) anyerror![]u8 {
     var buf_size: u32 = 10;
@@ -11,14 +14,15 @@ fn read_line(allocator: *Allocator) anyerror![]u8 {
     var idx: u32 = 0;
 
     var input_str: []u8 = try allocator.alloc(u8, buf_size);
+    errdefer allocator.free(input_str);
     while (true) {
-        c = stdin.readByte() catch {
-            try stdout.print("exit\n", .{});
-            std.os.exit(0);
-        };
-        if (c == '\n') {
-            input_str.len = idx;
-            break;
+        c = try stdin.readByte();
+        switch (c) {
+            '\n' => {
+                input_str.len = idx;
+                break;
+            },
+            else => {},
         }
 
         if (idx >= buf_size) {
@@ -51,26 +55,96 @@ fn split_str(allocator: *Allocator, str: []const u8, delim: u8) anyerror![][]u8 
             } else {
                 idx_end = i;
             }
-            std.log.info("i - 1 - idx_start = {}", .{idx_end - 1 - idx_start});
             array_str[count_delim] = try allocator.alloc(u8, idx_end - idx_start);
-            std.log.info("str[{}..{}] = {}", .{ idx_start, i, str[idx_start..idx_end] });
+            std.log.info("str[{}..{}] = {}", .{ idx_start, idx_end, str[idx_start..idx_end] });
             mem.copy(u8, array_str[count_delim], str[idx_start..idx_end]);
             idx_start = i + 1;
             count_delim += 1;
         }
     }
+    array_str.len = count_delim;
     std.log.info("number of `{c}` = {}", .{ delim, count_delim });
+    std.log.info("number args {}", .{array_str.len});
 
     return array_str;
 }
 
-fn parse_input(input: []u8) !void {
-    if (mem.eql(u8, input, "exit")) {
-        std.log.info("Exiting...", .{});
-        std.os.exit(0);
-    } else {
-        std.log.info("{s} does not match exit", .{input});
+fn parse_input(allocator: *Allocator, input: []const u8) !bool {
+    var input_array = try split_str(allocator, input, ' ');
+    defer {
+        for (input_array) |value, i| {
+            allocator.free(value);
+        }
+        allocator.free(input_array);
     }
+
+    if (input_array.len > 0) {
+        if (mem.eql(u8, input_array[0], "exit")) {
+            std.log.info("Exiting...", .{});
+            return false;
+        } else if (mem.eql(u8, input_array[0], "help")) {
+            std.log.info("Helping...", .{});
+        } else if (mem.eql(u8, input_array[0], "cd")) {
+            if (input_array.len > 2) {
+                std.log.info("cd: Too many arguments", .{});
+            } else {
+                if (input_array.len == 2) {
+                    std.os.chdir(input_array[1]) catch {
+                        try stdout.print("cd: No directory `{}`\n", .{input_array[1]});
+                    };
+                } else {
+                    const home_dir = std.os.getenv("HOME");
+                    if (home_dir != null) {
+                        try std.os.chdir(home_dir.?);
+                    }
+                }
+            }
+        } else {
+            std.log.info("{s} does not match any built-in commands", .{input});
+            //var child_pid = std.os.fork();
+        }
+    }
+    return true;
+}
+
+pub fn prompt_loop(allocator: *Allocator) !void {
+    var keep_running: bool = true;
+    while (keep_running) {
+        var ps1 = try build_ps1(allocator);
+        defer allocator.free(ps1);
+        try stdout.print("{}", .{ps1});
+        var input_str: ?[]const u8 = read_line(allocator) catch null;
+        errdefer allocator.free(input_str.?);
+
+        if (input_str != null) {
+            defer allocator.free(input_str.?);
+            keep_running = try parse_input(allocator, input_str.?);
+            std.log.info("string read: {}", .{input_str.?});
+        } else {
+            try stdout.print("exit\n", .{});
+            break;
+        }
+    }
+}
+
+pub fn build_ps1(allocator: *Allocator) ![]u8 {
+    const buf_size: u32 = 1024;
+    var ps1 = try allocator.alloc(u8, buf_size);
+    errdefer allocator.free(ps1);
+
+    var hstnm: [64]u8 = undefined;
+    _ = try std.os.gethostname(&hstnm);
+
+    var curr_dir: []u8 = try allocator.alloc(u8, buf_size);
+    defer allocator.free(curr_dir);
+    curr_dir = try std.os.getcwd(curr_dir);
+
+    _ = std.fmt.bufPrint(ps1, "{}:{}:{}$ ", .{ SHELL_NAME, hstnm, curr_dir }) catch {
+        _ = try std.fmt.bufPrint(ps1, "{}:$ ", .{SHELL_NAME});
+        ps1.len = SHELL_NAME.len + 2;
+    };
+
+    return ps1;
 }
 
 pub fn main() anyerror!void {
@@ -82,15 +156,7 @@ pub fn main() anyerror!void {
     };
     const allocator = &gpa.allocator;
 
-    while (true) {
-        try stdout.print("zigsh$ ", .{});
-        var input_str: []u8 = try read_line(allocator);
-        defer allocator.free(input_str);
-
-        try parse_input(input_str);
-
-        std.log.info("string read: {}", .{input_str});
-    }
+    try prompt_loop(allocator);
 }
 
 test "split_str" {
