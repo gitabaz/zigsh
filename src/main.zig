@@ -44,7 +44,7 @@ fn split_str(allocator: *Allocator, str: []const u8, delim: u8) anyerror![][]u8 
     var idx_start: usize = 0;
     var idx_end: usize = 0;
     for (str) |value, i| {
-        std.log.info("str[{}] = {c}", .{ i, value });
+        //std.log.info("str[{}] = {c}", .{ i, value });
         if (value == delim or i == str.len - 1) {
             if (count_delim >= buf_size) {
                 buf_size *= 2;
@@ -56,21 +56,38 @@ fn split_str(allocator: *Allocator, str: []const u8, delim: u8) anyerror![][]u8 
                 idx_end = i;
             }
             array_str[count_delim] = try allocator.alloc(u8, idx_end - idx_start);
-            std.log.info("str[{}..{}] = {}", .{ idx_start, idx_end, str[idx_start..idx_end] });
+            //std.log.info("str[{}..{}] = {}", .{ idx_start, idx_end, str[idx_start..idx_end] });
             mem.copy(u8, array_str[count_delim], str[idx_start..idx_end]);
             idx_start = i + 1;
             count_delim += 1;
         }
     }
     array_str.len = count_delim;
-    std.log.info("number of `{c}` = {}", .{ delim, count_delim });
-    std.log.info("number args {}", .{array_str.len});
+    //std.log.info("number of `{c}` = {}", .{ delim, count_delim });
+    //std.log.info("number args {}", .{array_str.len});
 
     return array_str;
 }
 
+fn handle_cd(input_array: [][]const u8) !void {
+    if (input_array.len > 2) {
+        try stdout.print("cd: Too many arguments", .{});
+    } else {
+        if (input_array.len == 2) {
+            std.os.chdir(input_array[1]) catch {
+                try stdout.print("cd: No directory `{}`\n", .{input_array[1]});
+            };
+        } else {
+            const home_dir = std.os.getenv("HOME");
+            if (home_dir != null) {
+                try std.os.chdir(home_dir.?);
+            }
+        }
+    }
+}
+
 fn parse_input(allocator: *Allocator, input: []const u8) !bool {
-    var input_array = try split_str(allocator, input, ' ');
+    var input_array: [][]const u8 = try split_str(allocator, input, ' ');
     defer {
         for (input_array) |value, i| {
             allocator.free(value);
@@ -80,28 +97,22 @@ fn parse_input(allocator: *Allocator, input: []const u8) !bool {
 
     if (input_array.len > 0) {
         if (mem.eql(u8, input_array[0], "exit")) {
-            std.log.info("Exiting...", .{});
+            //std.log.info("Exiting...", .{});
             return false;
         } else if (mem.eql(u8, input_array[0], "help")) {
-            std.log.info("Helping...", .{});
+            //std.log.info("Helping...", .{});
         } else if (mem.eql(u8, input_array[0], "cd")) {
-            if (input_array.len > 2) {
-                std.log.info("cd: Too many arguments", .{});
-            } else {
-                if (input_array.len == 2) {
-                    std.os.chdir(input_array[1]) catch {
-                        try stdout.print("cd: No directory `{}`\n", .{input_array[1]});
-                    };
-                } else {
-                    const home_dir = std.os.getenv("HOME");
-                    if (home_dir != null) {
-                        try std.os.chdir(home_dir.?);
-                    }
-                }
-            }
+            try handle_cd(input_array);
         } else {
-            std.log.info("{s} does not match any built-in commands", .{input});
-            //var child_pid = std.os.fork();
+            //std.log.info("{s} does not match any built-in commands", .{input});
+            var childproc = std.ChildProcess.exec(.{ .allocator = allocator, .argv = input_array }) catch null;
+            if (childproc != null) {
+                try stdout.print("{s}", .{childproc.?.stdout});
+                allocator.free(childproc.?.stdout);
+                allocator.free(childproc.?.stderr);
+            } else {
+                try stdout.print("{}: command not found\n", .{input_array[0]});
+            }
         }
     }
     return true;
@@ -119,7 +130,7 @@ pub fn prompt_loop(allocator: *Allocator) !void {
         if (input_str != null) {
             defer allocator.free(input_str.?);
             keep_running = try parse_input(allocator, input_str.?);
-            std.log.info("string read: {}", .{input_str.?});
+            //std.log.info("string read: {}", .{input_str.?});
         } else {
             try stdout.print("exit\n", .{});
             break;
@@ -148,8 +159,7 @@ pub fn build_ps1(allocator: *Allocator) ![]u8 {
 }
 
 pub fn main() anyerror!void {
-    std.log.info("All your codebase are belong to us.", .{});
-
+    //std.log.info("All your codebase are belong to us.", .{});
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit()) {
         std.log.info("memory leaks!", .{});
